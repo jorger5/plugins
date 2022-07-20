@@ -87,9 +87,11 @@ class AnalyzeCommand extends PackageLoopingCommand {
         getStringListArg(_customAnalysisFlag).expand<String>((String item) {
       if (item.endsWith('.yaml')) {
         final File file = packagesDir.fileSystem.file(item);
-        return (loadYaml(file.readAsStringSync()) as YamlList)
-            .toList()
-            .cast<String>();
+        final Object? yaml = loadYaml(file.readAsStringSync());
+        if (yaml == null) {
+          return <String>[];
+        }
+        return (yaml as YamlList).toList().cast<String>();
       }
       return <String>[item];
     }).toSet();
@@ -102,16 +104,25 @@ class AnalyzeCommand extends PackageLoopingCommand {
 
   @override
   Future<PackageResult> runForPackage(RepositoryPackage package) async {
-    // For non-example packages, fetch dependencies. 'flutter packages get'
-    // automatically runs 'pub get' in examples as part of handling the parent
-    // directory, which is guaranteed to come first in the package enumeration.
-    if (package.directory.basename != 'example' ||
-        !RepositoryPackage(package.directory.parent).pubspecFile.existsSync()) {
-      final int exitCode = await processRunner.runAndStream(
-          flutterCommand, <String>['packages', 'get'],
-          workingDir: package.directory);
-      if (exitCode != 0) {
-        return PackageResult.fail(<String>['Unable to get dependencies']);
+    // Analysis runs over the package and all subpackages, so all of them need
+    // `flutter pub get` run before analyzing. `example` packages can be
+    // skipped since 'flutter packages get' automatically runs `pub get` in
+    // examples as part of handling the parent directory.
+    final List<RepositoryPackage> packagesToGet = <RepositoryPackage>[
+      package,
+      ...await getSubpackages(package).toList(),
+    ];
+    for (final RepositoryPackage packageToGet in packagesToGet) {
+      if (packageToGet.directory.basename != 'example' ||
+          !RepositoryPackage(packageToGet.directory.parent)
+              .pubspecFile
+              .existsSync()) {
+        final int exitCode = await processRunner.runAndStream(
+            flutterCommand, <String>['pub', 'get'],
+            workingDir: packageToGet.directory);
+        if (exitCode != 0) {
+          return PackageResult.fail(<String>['Unable to get dependencies']);
+        }
       }
     }
 
